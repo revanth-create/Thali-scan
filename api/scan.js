@@ -24,7 +24,7 @@ export default async function handler(req, res) {
   const { image } = req.body || {};
   if (!image || image.length > 4000000) return res.status(400).json({ error: 'Bad image' });
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   try {
     const r = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -52,4 +52,4 @@ export default async function handler(req, res) {
   } catch (e) {
     return res.status(500).json({ error: 'Server error: ' + e.message });
   }
-}
+      }
