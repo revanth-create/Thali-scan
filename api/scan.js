@@ -10,6 +10,10 @@ const LIMIT_PER_HOUR = 20;
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(500).json({ error: 'Missing GEMINI_API_KEY in Vercel settings' });
+  }
+
   const ip = (req.headers['x-forwarded-for'] || 'x').split(',')[0].trim();
   const hour = Math.floor(Date.now() / 3600000);
   const key = ip + ':' + hour;
@@ -20,7 +24,7 @@ export default async function handler(req, res) {
   const { image } = req.body || {};
   if (!image || image.length > 4000000) return res.status(400).json({ error: 'Bad image' });
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   try {
     const r = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -37,10 +41,15 @@ export default async function handler(req, res) {
       }
     );
     const data = await r.json();
-    if (!r.ok) return res.status(502).json({ error: 'AI error', detail: data?.error?.message });
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    if (!r.ok) {
+      return res.status(502).json({ error: 'AI error: ' + (data?.error?.message || r.status) });
+    }
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    let text = parts.filter(p => p.text && !p.thought).map(p => p.text).join('');
+    text = text.replace(/```json|```/g, '').trim();
+    if (!text) return res.status(502).json({ error: 'AI returned nothing' });
     return res.status(200).json(JSON.parse(text));
   } catch (e) {
-    return res.status(500).json({ error: 'Scan failed' });
+    return res.status(500).json({ error: 'Server error: ' + e.message });
   }
 }
