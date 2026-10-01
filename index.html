@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thali Scan</title>
+<style>
+body{margin:0;background:#fffaf3;color:#2a2118;font-family:system-ui,sans-serif}
+main{max-width:480px;margin:0 auto;padding:20px 16px 40px}
+.card{background:#fff;border:1px solid #f0e2d0;border-radius:16px;padding:16px;margin-bottom:14px}
+#prev{width:100%;max-height:280px;object-fit:cover;border-radius:12px;display:none;margin-bottom:12px}
+button,label{display:block;width:100%;text-align:center;background:#e8590c;color:#fff;border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:600;cursor:pointer;box-sizing:border-box}
+button:disabled{opacity:.5} input[type=file]{display:none}
+.big{font-size:44px;font-weight:700;color:#e8590c;margin:0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
+.grid div{background:#fffaf3;border-radius:10px;padding:10px;text-align:center}
+.grid b{display:block;font-size:20px}.grid span,small{font-size:12px;color:#7a6a58}
+#err{color:#c92a2a}
+.fix{margin-top:14px;padding-top:14px;border-top:1px solid #f0e2d0}
+.fix input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0cfb8;border-radius:10px;font-size:16px;margin:8px 0}
+.fix button{background:#2a2118}
+</style></head><body><main>
+<h1>🍛 Thali Scan</h1>
+<p><small>Snap your meal. Get calories and macros. Made for Indian food.</small></p>
+<div class="card">
+  <img id="prev" alt="">
+  <label for="file">📷 Take / choose photo</label>
+  <input type="file" id="file" accept="image/*">
+  <button id="go" style="margin-top:10px;display:none">Scan this meal</button>
+  <p id="err"></p>
+</div>
+<div class="card" id="out" style="display:none"></div>
+<small>Estimates only, not medical advice.</small>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let b64 = null;
+
+function shrink(file){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = img.width * s; c.height = img.height * s;
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const url = await shrink(f);
+  b64 = url.split(',')[1];
+  $('prev').src = url; $('prev').style.display = 'block';
+  $('go').style.display = 'block'; $('out').style.display = 'none'; $('err').textContent = '';
+};
+
+async function scan(correction){
+  $('err').textContent = '';
+  document.querySelectorAll('button').forEach(b => b.disabled = true);
+  $('go').textContent = 'Scanning…';
+  try {
+    const r = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({image: b64, correction: correction || ''})});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Error');
+    if (!d.food) $('err').textContent = "Couldn't see food in that photo.";
+    else show(d);
+  } catch (e) { $('err').textContent = e.message || 'Scan failed. Try again.'; }
+  document.querySelectorAll('button').forEach(b => b.disabled = false);
+  $('go').textContent = 'Scan this meal';
+}
+
+$('go').onclick = () => scan('');
+
+function show(d){
+  const o = $('out'); o.innerHTML = '';
+  const mk = (parent, tag, txt, cls) => { const n = document.createElement(tag); n.textContent = txt; if (cls) n.className = cls; parent.appendChild(n); return n; };
+  mk(o, 'small', (d.meal || 'Your meal') + (d.confidence ? ' · ' + d.confidence + ' confidence' : ''));
+  mk(o, 'p', d.total.kcal + ' kcal', 'big');
+  const g = document.createElement('div'); g.className = 'grid';
+  [['Protein', d.total.protein_g], ['Carbs', d.total.carbs_g], ['Fat', d.total.fat_g]].forEach(([k, v]) => {
+    const x = document.createElement('div'), b = document.createElement('b'), s = document.createElement('span');
+    b.textContent = v + 'g'; s.textContent = k; x.append(b, s); g.appendChild(x);
+  });
+  o.appendChild(g);
+  const ul = document.createElement('ul');
+  (d.items || []).forEach(i => { const li = document.createElement('li'); li.textContent = `${i.name} (${i.portion}): ${i.kcal} kcal`; ul.appendChild(li); });
+  o.appendChild(ul);
+  if (d.alt) mk(o, 'small', 'Could also be: ' + d.alt);
+  if (d.tip) { o.appendChild(document.createElement('br')); mk(o, 'small', '💡 ' + d.tip); }
+
+  const fix = document.createElement('div'); fix.className = 'fix';
+  mk(fix, 'small', 'Not right? Tell us the real dish and portion:');
+  const inp = document.createElement('input');
+  inp.placeholder = 'e.g. capsicum rice, 1 plate'; inp.maxLength = 100;
+  const btn = document.createElement('button'); btn.textContent = 'Recalculate';
+  btn.onclick = () => { if (inp.value.trim()) scan(inp.value.trim()); };
+  fix.append(inp, btn);
+  o.appendChild(fix);
+  o.style.display = 'block';
+}
+</script></body></html>
