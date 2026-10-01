@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thali Scan</title>
+<style>
+body{margin:0;background:#fffaf3;color:#2a2118;font-family:system-ui,sans-serif}
+main{max-width:480px;margin:0 auto;padding:20px 16px 40px}
+.card{background:#fff;border:1px solid #f0e2d0;border-radius:16px;padding:16px;margin-bottom:14px}
+#prev{width:100%;max-height:280px;object-fit:cover;border-radius:12px;display:none;margin-bottom:12px}
+button,label{display:block;width:100%;text-align:center;background:#e8590c;color:#fff;border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:600;cursor:pointer;box-sizing:border-box}
+button:disabled{opacity:.5} input[type=file]{display:none}
+.big{font-size:44px;font-weight:700;color:#e8590c;margin:0}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
+.grid div{background:#fffaf3;border-radius:10px;padding:10px;text-align:center}
+.grid b{display:block;font-size:20px}.grid span,small{font-size:12px;color:#7a6a58}
+#err{color:#c92a2a} #msg{color:#2b8a3e}
+.fix{margin-top:14px;padding-top:14px;border-top:1px solid #f0e2d0}
+input[type=email],.fix input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0cfb8;border-radius:10px;font-size:16px;margin:8px 0}
+.fix button{background:#2a2118}
+.link{background:none;color:#7a6a58;font-size:12px;font-weight:400;padding:6px;width:auto;display:inline-block;text-decoration:underline}
+</style></head><body><main>
+<h1>🍛 Thali Scan</h1>
+<p><small>Snap your meal. Get calories and macros. Made for Indian food.</small></p>
+
+<div class="card" id="login" style="display:none">
+  <b>Log in to start</b>
+  <p><small>Enter your email. We send you a login link. 3 free scans every day.</small></p>
+  <input type="email" id="email" placeholder="you@email.com" autocomplete="email">
+  <button id="sendlink">Send login link</button>
+  <p id="msg"></p>
+</div>
+
+<div id="app" style="display:none">
+  <div class="card">
+    <img id="prev" alt="">
+    <label for="file">📷 Take / choose photo</label>
+    <input type="file" id="file" accept="image/*">
+    <button id="go" style="margin-top:10px;display:none">Scan this meal</button>
+    <p id="err"></p>
+  </div>
+  <div class="card" id="out" style="display:none"></div>
+  <button class="link" id="logout">Log out</button>
+</div>
+<small>Estimates only, not medical advice.</small>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let cfg = null, b64 = null;
+
+function loadSess(){ try { return JSON.parse(localStorage.getItem('ts_sess')); } catch(e){ return null; } }
+function saveSess(s){ try { localStorage.setItem('ts_sess', JSON.stringify(s)); } catch(e){} }
+function clearSess(){ try { localStorage.removeItem('ts_sess'); } catch(e){} }
+
+function readHash(){
+  if (!location.hash.includes('access_token')) return;
+  const p = new URLSearchParams(location.hash.slice(1));
+  saveSess({
+    access_token: p.get('access_token'),
+    refresh_token: p.get('refresh_token'),
+    expires_at: Date.now() + (parseInt(p.get('expires_in'), 10) || 3600) * 1000
+  });
+  history.replaceState(null, '', location.pathname);
+}
+
+async function getToken(){
+  let s = loadSess();
+  if (!s) return null;
+  if (Date.now() > s.expires_at - 60000) {
+    try {
+      const r = await fetch(cfg.url + '/auth/v1/token?grant_type=refresh_token', {
+        method: 'POST',
+        headers: { apikey: cfg.key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: s.refresh_token })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error('refresh');
+      s = { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + d.expires_in * 1000 };
+      saveSess(s);
+    } catch(e) { clearSess(); return null; }
+  }
+  return s.access_token;
+}
+
+function showLogin(){ $('login').style.display = 'block'; $('app').style.display = 'none'; }
+function showApp(){ $('login').style.display = 'none'; $('app').style.display = 'block'; }
+
+async function init(){
+  try {
+    cfg = await (await fetch('/api/config')).json();
+    if (!cfg.url || !cfg.key) throw new Error('config');
+  } catch(e){ showLogin(); $('msg').style.color = '#c92a2a'; $('msg').textContent = 'App settings are missing.'; return; }
+  readHash();
+  (await getToken()) ? showApp() : showLogin();
+}
+
+$('sendlink').onclick = async () => {
+  const email = $('email').value.trim();
+  if (!email) return;
+  $('msg').style.color = '#7a6a58'; $('msg').textContent = 'Sending…';
+  try {
+    const r = await fetch(cfg.url + '/auth/v1/otp', {
+      method: 'POST',
+      headers: { apikey: cfg.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, create_user: true })
+    });
+    if (!r.ok) { const d = await r.json().catch(()=>({})); throw new Error(d.msg || d.error_description || 'Could not send'); }
+    $('msg').style.color = '#2b8a3e';
+    $('msg').textContent = 'Check your email and tap the login link. Check spam too.';
+  } catch(e){ $('msg').style.color = '#c92a2a'; $('msg').textContent = e.message; }
+};
+
+$('logout').onclick = () => { clearSess(); showLogin(); };
+
+function shrink(file){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = img.width * s; c.height = img.height * s;
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const url = await shrink(f);
+  b64 = url.split(',')[1];
+  $('prev').src = url; $('prev').style.display = 'block';
+  $('go').style.display = 'block'; $('out').style.display = 'none'; $('err').textContent = '';
+};
+
+async function scan(correction){
+  $('err').textContent = '';
+  document.querySelectorAll('button').forEach(b => b.disabled = true);
+  $('go').textContent = 'Scanning…';
+  try {
+    const token = await getToken();
+    if (!token) { showLogin(); throw new Error('Please log in again'); }
+    const r = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ image: b64, correction: correction || '' })
+    });
+    const d = await r.json();
+    if (r.status === 401) { clearSess(); showLogin(); }
+    if (!r.ok) throw new Error(d.error || 'Error');
+    if (!d.food) $('err').textContent = "Couldn't see food in that photo.";
+    else show(d);
+  } catch (e) { $('err').textContent = e.message || 'Scan failed. Try again.'; }
+  document.querySelectorAll('button').forEach(b => b.disabled = false);
+  $('go').textContent = 'Scan this meal';
+}
+
+$('go').onclick = () => scan('');
+
+function show(d){
+  const o = $('out'); o.innerHTML = '';
+  const mk = (parent, tag, txt, cls) => { const n = document.createElement(tag); n.textContent = txt; if (cls) n.className = cls; parent.appendChild(n); return n; };
+  mk(o, 'small', (d.meal || 'Your meal') + (d.confidence ? ' · ' + d.confidence + ' confidence' : ''));
+  mk(o, 'p', d.total.kcal + ' kcal', 'big');
+  const g = document.createElement('div'); g.className = 'grid';
+  [['Protein', d.total.protein_g], ['Carbs', d.total.carbs_g], ['Fat', d.total.fat_g]].forEach(([k, v]) => {
+    const x = document.createElement('div'), b = document.createElement('b'), s = document.createElement('span');
+    b.textContent = v + 'g'; s.textContent = k; x.append(b, s); g.appendChild(x);
+  });
+  o.appendChild(g);
+  const ul = document.createElement('ul');
+  (d.items || []).forEach(i => { const li = document.createElement('li'); li.textContent = `${i.name} (${i.portion}): ${i.kcal} kcal`; ul.appendChild(li); });
+  o.appendChild(ul);
+  if (d.alt) mk(o, 'small', 'Could also be: ' + d.alt);
+  if (d.tip) { o.appendChild(document.createElement('br')); mk(o, 'small', '💡 ' + d.tip); }
+
+  const fix = document.createElement('div'); fix.className = 'fix';
+  mk(fix, 'small', 'Not right? Tell us the real dish and portion (uses 1 scan):');
+  const inp = document.createElement('input');
+  inp.placeholder = 'e.g. capsicum rice, 1 plate'; inp.maxLength = 100;
+  const btn = document.createElement('button'); btn.textContent = 'Recalculate';
+  btn.onclick = () => { if (inp.value.trim()) scan(inp.value.trim()); };
+  fix.append(inp, btn);
+  o.appendChild(fix);
+  if (typeof d.left === 'number') { o.appendChild(document.createElement('br')); mk(o, 'small', d.left + ' free scan(s) left today'); }
+  o.style.display = 'block';
+}
+
+init();
+</script></body></html>
